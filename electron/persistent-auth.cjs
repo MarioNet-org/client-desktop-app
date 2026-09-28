@@ -4,6 +4,7 @@ const validToken = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(v
 const validUser = value => value && typeof value.id === 'string' && typeof value.email === 'string' && typeof value.emailVerified === 'boolean';
 
 class PersistentAuth extends AuthClient {
+  constructor(origin, options = {}) { super(origin, options); this.clientSocket = null; this.clientSocketReady = null; this.onConnection = () => {}; this.onSignal = () => {}; }
   state() { return !this.closed && this.session ? { user: { ...this.session.user }, expiresAt: this.session.expiresAt } : null; }
   async post(route, body) {
     return this.fetch(`${this.origin}/api/v1/auth/${route}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(this.timeoutMs), redirect: 'error' });
@@ -93,6 +94,35 @@ class PersistentAuth extends AuthClient {
       return { ok: true, nodes: body.nodes.map(({ id, name, platform, online, lastSeenAt }) => ({ id, name, platform, online, lastSeenAt })) };
     } catch (error) { return { ok: false, code: error.message }; }
   }
+  async ensureClientSocket() {
+    if (this.clientSocket?.readyState === 1) return;
+    if (this.clientSocketReady) return this.clientSocketReady;
+    this.clientSocketReady = (async () => {
+      const token = await this.accessToken();
+      const socket = new WebSocket(this.origin.replace(/^http/, 'ws') + '/api/v1/ws'); this.clientSocket = socket;
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { socket.close(); reject(new Error('TIMEOUT')); }, this.timeoutMs);
+        socket.onopen = () => socket.send(JSON.stringify({ type: 'authenticate', accessToken: token }));
+        socket.onmessage = event => { try { const data = JSON.parse(event.data); if (data.type === 'ready') { clearTimeout(timer); resolve(); } else if (data.type === 'connection.updated') this.onConnection(data.connection); else if (data.type === 'signal') this.onSignal(data); } catch {} };
+        socket.onerror = () => { clearTimeout(timer); reject(new Error('NETWORK_ERROR')); };
+        socket.onclose = () => { clearTimeout(timer); if (this.clientSocket === socket) this.clientSocket = null; };
+      });
+    })();
+    try { await this.clientSocketReady; } finally { this.clientSocketReady = null; }
+  }
+  async requestConnection(nodeId) {
+    try { await this.ensureClientSocket(); const body = await this.request('/connections', 'POST', { nodeId }); return body.connection ? { ok: true, connection: body.connection } : { ok: false, code: 'INVALID_RESPONSE' }; }
+    catch (error) { return { ok: false, code: error.message }; }
+  }
+  async sendSignal(signal) {
+    await this.ensureClientSocket();
+    if (!this.clientSocket || this.clientSocket.readyState !== 1) throw new Error('PEER_OFFLINE');
+    this.clientSocket.send(JSON.stringify({ type: 'signal', ...signal }));
+  }
+  async closeConnection(connectionId) {
+    try { await this.request(`/connections/${connectionId}`, 'DELETE'); return { ok: true }; }
+    catch (error) { return { ok: false, code: error.message }; }
+  }
   async verification(resend = false) {
     try {
       const data = await this.request(`/auth/email/verification/${resend ? 'request' : 'status'}`, 'POST', {});
@@ -126,6 +156,7 @@ class PersistentAuth extends AuthClient {
     try {
       if (this.rotating) await this.rotating.catch(() => {});
       clearTimeout(this.timer);
+      this.clientSocket?.close(); this.clientSocket = null;
       if (!this.session) return { ok: true };
       const tombstone = { refreshToken: this.session.refreshToken, logout: true };
       await this.store.save(tombstone);
@@ -137,6 +168,7 @@ class PersistentAuth extends AuthClient {
   }
   async dispose() {
     this.closed = true; clearTimeout(this.timer);
+    this.clientSocket?.close(); this.clientSocket = null;
     // Keep the encrypted session on disk. Closing the app is not signing out.
     if (this.rotating) await this.rotating.catch(() => {});
     clearTimeout(this.timer); this.session = null;

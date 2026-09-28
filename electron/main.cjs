@@ -49,6 +49,8 @@ void app.whenReady().then(async () => {
     app.quit(); return;
   }
   auth.store = new SessionStore(path.join(app.getPath('userData'), 'sessions'), auth.origin, require('electron').safeStorage);
+  auth.onConnection = connection => { if (window && !window.isDestroyed()) window.webContents.send('connection:updated', connection); };
+  auth.onSignal = signal => { if (window && !window.isDestroyed()) window.webContents.send('webrtc:signal', signal); };
   try { await auth.restore(); } catch { dialog.showErrorBox('로그인 정보 오류', '저장된 로그인 정보를 읽지 못했어요. OS 계정과 저장소 권한을 확인해주세요.'); app.quit(); return; }
   ipcMain.handle('auth:verification', (event, resend) => trusted(event) && typeof resend === 'boolean' ? auth.verification(resend) : { ok: false, code: 'UNTRUSTED' });
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
@@ -58,6 +60,9 @@ void app.whenReady().then(async () => {
   ipcMain.handle('auth:state', event => trusted(event) ? auth.state() : null);
   ipcMain.handle('auth:signout', event => trusted(event) ? auth.signout() : { ok: false, code: 'UNTRUSTED' });
   ipcMain.handle('nodes:list', event => trusted(event) ? auth.listNodes() : { ok: false, code: 'UNTRUSTED' });
+  ipcMain.handle('connections:request', (event, nodeId) => trusted(event) && typeof nodeId === 'string' ? auth.requestConnection(nodeId) : { ok: false, code: 'UNTRUSTED' });
+  ipcMain.handle('connections:close', (event, connectionId) => trusted(event) && typeof connectionId === 'string' ? auth.closeConnection(connectionId) : { ok: false, code: 'UNTRUSTED' });
+  ipcMain.handle('webrtc:signal', async (event, signal) => { if (!trusted(event) || !signal || typeof signal !== 'object') return { ok: false, code: 'UNTRUSTED' }; try { await auth.sendSignal(signal); return { ok: true }; } catch (error) { return { ok: false, code: error.message }; } });
   const presets = new PresetStore(path.join(app.getPath('userData'), 'presets'));
   for (const operation of ['list', 'save', 'delete']) {
     ipcMain.handle(`presets:${operation}`, async (event, input) => {

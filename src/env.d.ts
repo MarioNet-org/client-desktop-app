@@ -14,6 +14,11 @@ interface Window {
     getSession(): Promise<LoginSession | null>;
     signout(): Promise<{ ok: boolean; code?: string }>;
     listNodes(): Promise<{ ok: true; nodes: MonitorNode[] } | { ok: false; code: string }>;
+    requestConnection(nodeId: string): Promise<{ ok: true; connection: { id: string; status: string; nodeId: string } } | { ok: false; code: string }>;
+    closeConnection(connectionId: string): Promise<{ ok: boolean; code?: string }>;
+    sendWebRtcSignal(signal: { connectionId: string; kind: 'offer' | 'answer' | 'ice'; payload: unknown }): Promise<{ ok: boolean; code?: string }>;
+    onConnectionUpdated(callback: (connection: { id: string; status: string; nodeId: string }) => void): () => void;
+    onWebRtcSignal(callback: (signal: { connectionId: string; kind: 'offer' | 'answer' | 'ice'; payload: unknown }) => void): () => void;
     listPresets(): Promise<PresetResult>;
     savePreset(preset: { id?: string; name: string; icon: string | null }): Promise<PresetResult>;
     deletePreset(id: string): Promise<PresetResult>;

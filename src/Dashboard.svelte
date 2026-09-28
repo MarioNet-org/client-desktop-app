@@ -31,6 +31,11 @@
   let saving = $state(false);
   let readingIcon = $state(false);
   let uploadVersion = 0;
+  let monitorStreams = $state(new Map<string, MediaStream>());
+  let monitorStatus = $state(new Map<string, string>());
+  const connections = new Map<string, { id: string; nodeId: string }>();
+  const peers = new Map<string, RTCPeerConnection>();
+  const pendingIce = new Map<string, RTCIceCandidateInit[]>();
   const visibleNodes = $derived(nodes.filter(node => node.name.toLocaleLowerCase().includes(query.toLocaleLowerCase().trim()) && (filter === 'all' || node.online === (filter === 'online'))));
   const onlineCount = $derived(nodes.filter(node => node.online).length);
   const selectedOnline = $derived(nodes.filter(node => selected.includes(node.id) && node.online).length);
@@ -42,10 +47,35 @@
     try {
       const result = await window.marioNet!.listNodes();
       if (disposed) return;
-      if (result.ok) { nodes = [...result.nodes].sort((a, b) => a.name.localeCompare(b.name, 'ko', { numeric: true })); nodeError = ''; lastUpdated = new Date(); }
+      if (result.ok) { nodes = [...result.nodes].sort((a, b) => a.name.localeCompare(b.name, 'ko', { numeric: true })); nodeError = ''; lastUpdated = new Date(); for (const node of nodes) if (node.online) void startMonitoring(node); }
       else nodeError = result.code === 'RATE_LIMITED' ? '요청이 많아요. 잠시 후 새로고침해주세요.' : 'Node 목록을 불러오지 못했어요. 서버 연결을 확인해주세요.';
     } catch { if (!disposed) nodeError = 'Node 목록을 불러오지 못했어요. 다시 시도해주세요.'; }
     finally { if (!disposed) { loading = false; refreshing = false; } }
+  }
+  function setStream(nodeId: string, stream: MediaStream | undefined) { const next = new Map(monitorStreams); if (stream) next.set(nodeId, stream); else next.delete(nodeId); monitorStreams = next; }
+  function setMonitorStatus(nodeId: string, status: string) { const next = new Map(monitorStatus); next.set(nodeId, status); monitorStatus = next; }
+  function streamVideo(element: HTMLVideoElement, stream: MediaStream | undefined) {
+    const update = (value: MediaStream | undefined) => { element.srcObject = value ?? null; if (value) void element.play().catch(() => {}); };
+    update(stream); return { update, destroy: () => { element.srcObject = null; } };
+  }
+  async function startMonitoring(node: MonitorNode) {
+    if (connections.has(node.id) || !node.online || disposed) return;
+    connections.set(node.id, { id: '', nodeId: node.id }); setMonitorStatus(node.id, '화면 연결 요청 중');
+    const result = await window.marioNet!.requestConnection(node.id);
+    if (!result.ok) { connections.delete(node.id); setMonitorStatus(node.id, '연결 요청 실패'); return; }
+    connections.set(node.id, result.connection); setMonitorStatus(node.id, 'Host 승인 대기 중');
+  }
+  async function handleSignal(signal: { connectionId: string; kind: 'offer' | 'answer' | 'ice'; payload: unknown }) {
+    const connection = [...connections.values()].find(value => value.id === signal.connectionId); if (!connection) return;
+    if (signal.kind === 'ice') { const peer = peers.get(signal.connectionId); if (!peer?.remoteDescription) pendingIce.set(signal.connectionId, [...(pendingIce.get(signal.connectionId) ?? []), signal.payload as RTCIceCandidateInit]); else await peer.addIceCandidate(signal.payload as RTCIceCandidateInit); return; }
+    if (signal.kind !== 'offer') return;
+    peers.get(signal.connectionId)?.close();
+    const peer = new RTCPeerConnection(); peers.set(signal.connectionId, peer);
+    peer.ontrack = event => { if (event.streams[0]) { setStream(connection.nodeId, event.streams[0]); setMonitorStatus(connection.nodeId, '화면 모니터링 중'); } };
+    peer.onconnectionstatechange = () => { if (['failed', 'disconnected', 'closed'].includes(peer.connectionState)) { setStream(connection.nodeId, undefined); setMonitorStatus(connection.nodeId, '화면 연결이 끊겼어요'); } };
+    peer.onicecandidate = event => { if (event.candidate) void window.marioNet!.sendWebRtcSignal({ connectionId: signal.connectionId, kind: 'ice', payload: event.candidate.toJSON() }); };
+    try { await peer.setRemoteDescription(signal.payload as RTCSessionDescriptionInit); for (const candidate of pendingIce.get(signal.connectionId) ?? []) await peer.addIceCandidate(candidate); pendingIce.delete(signal.connectionId); const answer = await peer.createAnswer(); await peer.setLocalDescription(answer); await window.marioNet!.sendWebRtcSignal({ connectionId: signal.connectionId, kind: 'answer', payload: answer }); }
+    catch { setMonitorStatus(connection.nodeId, '화면 협상에 실패했어요'); peer.close(); peers.delete(signal.connectionId); }
   }
   async function loadPresets() {
     presetLoading = true;
@@ -60,7 +90,9 @@
   onMount(() => {
     void loadNodes(); void loadPresets();
     const timer = setInterval(() => { if (document.visibilityState === 'visible') void loadNodes(); }, 15000);
-    return () => { disposed = true; uploadVersion++; clearInterval(timer); };
+    const offConnection = window.marioNet!.onConnectionUpdated(connection => { const item = [...connections.values()].find(value => value.id === connection.id || value.nodeId === connection.nodeId); if (!item) return; connections.set(connection.nodeId, connection); if (connection.status === 'ACCEPTED') setMonitorStatus(connection.nodeId, 'Host가 화면을 준비하는 중'); if (['CLOSED', 'REJECTED', 'EXPIRED'].includes(connection.status)) { peers.get(connection.id)?.close(); peers.delete(connection.id); connections.delete(connection.nodeId); setStream(connection.nodeId, undefined); setMonitorStatus(connection.nodeId, '화면 연결 종료'); } });
+    const offSignal = window.marioNet!.onWebRtcSignal(signal => { void handleSignal(signal); });
+    return () => { disposed = true; uploadVersion++; clearInterval(timer); offConnection(); offSignal(); for (const [id, peer] of peers) { peer.close(); void window.marioNet!.closeConnection(id); } };
   });
   $effect(() => { if (modal && dialog && !dialog.open) dialog.showModal(); else if (!modal && dialog?.open) dialog.close(); });
   function openNode(node: MonitorNode) {
@@ -158,7 +190,7 @@
         <div class="node-grid">
           {#each visibleNodes as node (node.id)}
             <button class="node-card" class:selected={selected.includes(node.id)} aria-pressed={multiControl && selected.includes(node.id)} aria-label={`${node.name} ${multiControl ? '선택' : '제어'}`} onclick={() => openNode(node)}>
-              <div class="node-preview"><span class="node-state"><i class="status-dot" class:online={node.online}></i>{node.online ? '온라인' : '오프라인'}</span><span class="node-check">{#if selected.includes(node.id)}<Icon name="check" size={13} />{/if}</span><Icon name="monitor" size={34} /><span class="preview-caption">{node.online ? '화면 연결 대기' : 'Host 연결 대기'}</span></div>
+              <div class="node-preview"><span class="node-state"><i class="status-dot" class:online={node.online}></i>{node.online ? '온라인' : '오프라인'}</span><span class="node-check">{#if selected.includes(node.id)}<Icon name="check" size={13} />{/if}</span>{#if monitorStreams.get(node.id)}<video class="node-stream" autoplay muted playsinline use:streamVideo={monitorStreams.get(node.id)}></video>{:else}<Icon name="monitor" size={34} />{/if}<span class="preview-caption">{node.online ? monitorStatus.get(node.id) ?? '화면 연결 대기' : 'Host 연결 대기'}</span></div>
               <div class="node-info"><strong>{node.name}</strong><span class="node-platform">{node.platform === 'windows' ? 'Windows' : node.platform === 'macos' ? 'macOS' : 'Linux'}</span><small>{lastSeen(node.lastSeenAt)}</small></div>
             </button>
           {/each}
@@ -186,7 +218,7 @@
 <dialog class="dashboard-dialog control-dialog" class:control-dialog={modal === 'control'} bind:this={dialog} oncancel={event => { if (saving) event.preventDefault(); else closeModal(); }} onclose={closeModal} aria-labelledby="dialog-title">
   <div class="dialog-heading"><h2 id="dialog-title">{modal === 'control' ? activeNode?.name : modal === 'node' ? 'Node 연결하기' : modal === 'delete' ? '프리셋 삭제' : editingId ? '프리셋 수정' : '새 프리셋'}</h2><button class="icon-button" aria-label="창 닫기" disabled={saving} onclick={closeModal}><Icon name="close" size={19} /></button></div>
   {#if modal === 'control'}
-    <div class="control-preview"><Icon name="monitor" size={64} /><span><i class:online={activeNode?.online}></i>{activeNode?.online ? '온라인 · 연결 대기' : '오프라인'}</span></div><p class="dialog-copy">이 Node의 화면을 확인하고 키보드·마우스를 제어하는 공간입니다.</p><button class="dash-button primary full" disabled={!activeNode?.online}>연결 시작 <Icon name="arrow" size={16} /></button>
+    {#if activeNode && monitorStreams.get(activeNode.id)}<video class="remote-screen" autoplay muted playsinline use:streamVideo={monitorStreams.get(activeNode.id)}></video>{:else}<div class="control-preview"><Icon name="monitor" size={64} /><span><i class:online={activeNode?.online}></i>{activeNode?.online ? monitorStatus.get(activeNode.id) ?? '화면 연결 대기' : '오프라인'}</span></div>{/if}<p class="dialog-copy">이 Node의 화면을 읽기 전용으로 모니터링하는 공간입니다.</p>
   {:else if modal === 'node'}
     <p class="dialog-copy">제어받을 PC의 Host 앱에서 등록해주세요.</p><ol class="connection-steps"><li><span>1</span><div><strong>Host에서 로그인</strong><p>현재 Client와 같은 계정을 사용하세요.</p></div></li><li><span>2</span><div><strong>PC를 Node로 등록</strong><p>이메일 인증을 완료한 뒤 PC를 등록하세요.</p></div></li><li><span>3</span><div><strong>이곳에서 목록 새로고침</strong><p>등록한 Node가 자동으로 표시됩니다.</p></div></li></ol><div class="dialog-note">Host 앱과 화면 전송 기능은 개발 예정이에요. Client에서 가상의 PC를 등록하지 않습니다.</div><button class="dash-button primary full" onclick={() => { closeModal(); void loadNodes(); }}>목록 새로고침<Icon name="refresh" size={16} /></button>
   {:else if modal === 'delete'}
