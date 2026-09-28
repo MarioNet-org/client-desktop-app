@@ -8,6 +8,8 @@
   let nodes = $state<MonitorNode[]>([]);
   let presets = $state<MacroPreset[]>([]);
   let selected = $state<string[]>([]);
+  let multiControl = $state(false);
+  let activeNode = $state<MonitorNode | null>(null);
   let activeId = $state<string | null>(null);
   let locked = $state(false);
   let query = $state('');
@@ -20,7 +22,7 @@
   let lastUpdated = $state<Date | null>(null);
   let signingOut = $state(false);
   let disposed = false;
-  let modal = $state<'preset' | 'delete' | 'node' | null>(null);
+  let modal = $state<'preset' | 'delete' | 'node' | 'control' | null>(null);
   let dialog = $state<HTMLDialogElement>();
   let editingId = $state<string | undefined>();
   let draftName = $state('');
@@ -61,7 +63,10 @@
     return () => { disposed = true; uploadVersion++; clearInterval(timer); };
   });
   $effect(() => { if (modal && dialog && !dialog.open) dialog.showModal(); else if (!modal && dialog?.open) dialog.close(); });
-  function toggleNode(id: string) { if (!locked) selected = selected.includes(id) ? selected.filter(value => value !== id) : [...selected, id]; }
+  function openNode(node: MonitorNode) {
+    if (multiControl) { if (!locked) selected = selected.includes(node.id) ? selected.filter(value => value !== node.id) : [...selected, node.id]; }
+    else { activeNode = node; modal = 'control'; }
+  }
   function selectVisible() { if (!locked) selected = [...new Set([...selected, ...visibleNodes.map(node => node.id)])]; }
   function editPreset(preset?: MacroPreset) {
     editingId = preset?.id; draftName = preset?.name ?? ''; draftIcon = preset?.icon ?? null;
@@ -125,12 +130,12 @@
   }
 </script>
 
-<main class="dashboard">
+<main class="dashboard" class:multi-mode={multiControl}>
   <section class="monitor-workspace" aria-labelledby="monitor-title">
     <EmailVerification {user} />
     <header class="monitor-header">
       <div><p class="section-kicker">MY WORKSPACE</p><h1 id="monitor-title">노드 관제 <span>{nodes.length}</span></h1><p class="section-description">내 PC들의 상태를 한눈에 확인하세요.</p></div>
-      <button class="dash-button primary" onclick={() => modal = 'node'}><Icon name="plus" size={16} />Node 추가</button>
+      <div class="header-actions"><button class:active={multiControl} class="dash-button" onclick={() => { multiControl = !multiControl; if (!multiControl) selected = []; }}><Icon name="layers" size={16} />동시제어</button><button class="dash-button primary" onclick={() => modal = 'node'}><Icon name="plus" size={16} />Node 추가</button></div>
     </header>
     <div class="monitor-toolbar">
       <div class="node-filters" aria-label="Node 상태 필터">
@@ -152,7 +157,7 @@
       {:else}
         <div class="node-grid">
           {#each visibleNodes as node (node.id)}
-            <button class="node-card" class:selected={selected.includes(node.id)} aria-pressed={selected.includes(node.id)} aria-label={`${node.name} 선택`} disabled={locked} onclick={() => toggleNode(node.id)}>
+            <button class="node-card" class:selected={selected.includes(node.id)} aria-pressed={multiControl && selected.includes(node.id)} aria-label={`${node.name} ${multiControl ? '선택' : '제어'}`} onclick={() => openNode(node)}>
               <div class="node-preview"><span class="node-state"><i class="status-dot" class:online={node.online}></i>{node.online ? '온라인' : '오프라인'}</span><span class="node-check">{#if selected.includes(node.id)}<Icon name="check" size={13} />{/if}</span><Icon name="monitor" size={34} /><span class="preview-caption">{node.online ? '화면 연결 대기' : 'Host 연결 대기'}</span></div>
               <div class="node-info"><strong>{node.name}</strong><span class="node-platform">{node.platform === 'windows' ? 'Windows' : node.platform === 'macos' ? 'macOS' : 'Linux'}</span><small>{lastSeen(node.lastSeenAt)}</small></div>
             </button>
@@ -164,7 +169,7 @@
     <footer class="monitor-footer"><span><i class="status-dot" class:online={!!lastUpdated && !nodeError}></i>{lastUpdated ? `${lastUpdated.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })} 업데이트` : '서버에서 목록 확인 중'}</span><span>15초마다 상태 갱신 · 화면 스트리밍 준비 중</span></footer>
   </section>
 
-  <aside class="macro-sidebar" aria-label="매크로 작업">
+  {#if multiControl}<aside class="macro-sidebar" aria-label="매크로 작업">
     <div class="macro-heading"><div class="macro-symbol"><Icon name="layers" size={19} /></div><div><h2>매크로 작업</h2><p>함께 움직일 Node를 준비하세요.</p></div></div>
     <section class="selection-panel"><div class="section-label">실행 대상 선택</div><button class="selection-switch" class:locked role="switch" aria-checked={!locked} aria-label="노드 선택 열림" onclick={() => locked = !locked}><Icon name={locked ? 'lock' : 'unlock'} size={18} /><span>{locked ? '노드 선택 잠금' : '노드 선택 열림'}</span><span class="switch-track"><span></span></span></button><p>{locked ? '선택한 Node가 고정되었어요. 다시 열면 변경할 수 있어요.' : '왼쪽에서 Node를 선택한 뒤 잠가주세요.'}</p><div class="target-summary"><strong>{selected.length}<span>개 선택</span></strong><span>온라인 {selectedOnline}개</span></div>{#if selected.length}<div class="target-chips">{#each selected.slice(0,4) as id}<span title={nodes.find(node => node.id === id)?.name}>{nodes.find(node => node.id === id)?.name ?? '등록 해제된 Node'}</span>{/each}{#if selected.length > 4}<span>+{selected.length - 4}</span>{/if}</div>{/if}</section>
     <section class="presets-panel" aria-labelledby="presets-title"><div class="preset-heading"><h3 id="presets-title">프리셋 <span>{presets.length}</span></h3><button class="icon-button" aria-label="프리셋 추가" disabled={presetLoading || !!presetError || presets.length >= 30} onclick={() => editPreset()}><Icon name="plus" size={18} /></button></div>
@@ -175,12 +180,14 @@
       {#if activePreset}<div class="preset-detail"><div class="preset-detail-heading"><strong>{activePreset.name}</strong><div><button class="icon-button" aria-label="프리셋 수정" onclick={() => editPreset(activePreset)}><Icon name="edit" size={15} /></button><button class="icon-button" aria-label="프리셋 삭제" onclick={() => { modalError = ''; modal = 'delete'; }}><Icon name="trash" size={15} /></button></div></div><div class="macro-empty"><Icon name="layers" size={20} /><p>아직 등록된 동작이 없어요.</p><span>매크로 동작 편집은 준비 중이에요.</span></div></div>{/if}
     </section>
     <div class="macro-bottom"><p><Icon name="info" size={14} />프리셋은 이 PC에 계정별로 저장돼요.</p><button class="run-macro" disabled><Icon name="play" size={15} />매크로 실행 <span>준비 중</span></button><div class="account-bar"><span class="avatar">{user.email.slice(0,1).toUpperCase()}</span><span class="account-email" title={user.email}>{user.email}</span><button class="icon-button" aria-label="로그아웃" disabled={signingOut} onclick={signout}><Icon name="logout" size={17} /></button></div></div>
-  </aside>
+  </aside>{/if}
 </main>
 
-<dialog class="dashboard-dialog" bind:this={dialog} oncancel={event => { if (saving) event.preventDefault(); else closeModal(); }} onclose={closeModal} aria-labelledby="dialog-title">
-  <div class="dialog-heading"><h2 id="dialog-title">{modal === 'node' ? 'Node 연결하기' : modal === 'delete' ? '프리셋 삭제' : editingId ? '프리셋 수정' : '새 프리셋'}</h2><button class="icon-button" aria-label="창 닫기" disabled={saving} onclick={closeModal}><Icon name="close" size={19} /></button></div>
-  {#if modal === 'node'}
+<dialog class="dashboard-dialog control-dialog" class:control-dialog={modal === 'control'} bind:this={dialog} oncancel={event => { if (saving) event.preventDefault(); else closeModal(); }} onclose={closeModal} aria-labelledby="dialog-title">
+  <div class="dialog-heading"><h2 id="dialog-title">{modal === 'control' ? activeNode?.name : modal === 'node' ? 'Node 연결하기' : modal === 'delete' ? '프리셋 삭제' : editingId ? '프리셋 수정' : '새 프리셋'}</h2><button class="icon-button" aria-label="창 닫기" disabled={saving} onclick={closeModal}><Icon name="close" size={19} /></button></div>
+  {#if modal === 'control'}
+    <div class="control-preview"><Icon name="monitor" size={64} /><span><i class:online={activeNode?.online}></i>{activeNode?.online ? '온라인 · 연결 대기' : '오프라인'}</span></div><p class="dialog-copy">이 Node의 화면을 확인하고 키보드·마우스를 제어하는 공간입니다.</p><button class="dash-button primary full" disabled={!activeNode?.online}>연결 시작 <Icon name="arrow" size={16} /></button>
+  {:else if modal === 'node'}
     <p class="dialog-copy">제어받을 PC의 Host 앱에서 등록해주세요.</p><ol class="connection-steps"><li><span>1</span><div><strong>Host에서 로그인</strong><p>현재 Client와 같은 계정을 사용하세요.</p></div></li><li><span>2</span><div><strong>PC를 Node로 등록</strong><p>이메일 인증을 완료한 뒤 PC를 등록하세요.</p></div></li><li><span>3</span><div><strong>이곳에서 목록 새로고침</strong><p>등록한 Node가 자동으로 표시됩니다.</p></div></li></ol><div class="dialog-note">Host 앱과 화면 전송 기능은 개발 예정이에요. Client에서 가상의 PC를 등록하지 않습니다.</div><button class="dash-button primary full" onclick={() => { closeModal(); void loadNodes(); }}>목록 새로고침<Icon name="refresh" size={16} /></button>
   {:else if modal === 'delete'}
     <p class="dialog-copy"><strong>{activePreset?.name}</strong> 프리셋을 삭제할까요?<br />선택한 Node와 PC 등록에는 영향을 주지 않아요.</p>{#if modalError}<p class="error" role="alert">{modalError}</p>{/if}<div class="dialog-actions"><button class="dash-button" disabled={saving} onclick={closeModal}>취소</button><button class="dash-button danger" disabled={saving} onclick={deletePreset}>{saving ? '삭제 중…' : '삭제'}</button></div>
