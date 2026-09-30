@@ -11,8 +11,8 @@ const root = path.join(__dirname, '..');
 const entry = path.join(root, 'dist', 'index.html');
 const devUrl = app.isPackaged ? undefined : process.env.MARIONET_DEV_URL;
 const configPath = app.isPackaged
-  ? path.join(process.env.PORTABLE_EXECUTABLE_DIR || path.dirname(app.getPath('exe')), 'marionet.env')
-  : path.join(root, '.env');
+  ? path.join(root, '.env')
+  : path.join(root, '.env.development');
 if (devUrl && devUrl !== 'http://127.0.0.1:5173') throw new Error('Invalid development URL');
 let window;
 let auth;
@@ -45,7 +45,7 @@ void app.whenReady().then(async () => {
       onExpired: () => { if (window && !window.isDestroyed()) window.webContents.send('auth:expired'); },
     });
   } catch {
-    dialog.showErrorBox('MarioNet 설정 오류', '서버 주소를 확인해주세요. MARIONET_API_URL에는 HTTPS 주소 또는 로컬 HTTP 주소를 설정해야 합니다.');
+    dialog.showErrorBox('MarioNet 설정 오류', '서버 주소를 확인해주세요. MARIONET_BE_URL에는 HTTPS 주소 또는 로컬 HTTP 주소를 설정해야 합니다.');
     app.quit(); return;
   }
   auth.store = new SessionStore(path.join(app.getPath('userData'), 'sessions'), auth.origin, require('electron').safeStorage);

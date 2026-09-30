@@ -25,7 +25,7 @@ const password = 'desktop-test-password!';
 let desktop;
 try {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const env = { ...process.env, MARIONET_API_URL: `http://127.0.0.1:${server.address().port}` };
+  const env = { ...process.env, MARIONET_BE_URL: `http://127.0.0.1:${server.address().port}` };
   delete env.ELECTRON_RUN_AS_NODE;
   delete env.MARIONET_DEV_URL;
   desktop = await electron.launch({ args: ['.', '--enable-logging=stderr', `--user-data-dir=${path.join(root, '.local', 'desktop-test-profile')}`], cwd: root, env });

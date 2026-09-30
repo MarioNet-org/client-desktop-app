@@ -5,7 +5,7 @@ function apiUrl(value = 'http://127.0.0.1:4000') {
   const url = new URL(value);
   const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
   if ((url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) || url.username || url.password || url.search || url.hash || url.pathname !== '/') {
-    throw new Error('MARIONET_API_URL must be an HTTPS origin (HTTP is allowed only on loopback).');
+    throw new Error('MARIONET_BE_URL must be an HTTPS origin (HTTP is allowed only on loopback).');
   }
   return url.origin;
 }
@@ -14,7 +14,7 @@ function loadApiUrl(path) {
   let env = {};
   try { env = parseEnv(readFileSync(path, 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
-  return apiUrl(process.env.MARIONET_API_URL || env.MARIONET_API_URL);
+  return apiUrl(process.env.MARIONET_BE_URL || env.MARIONET_BE_URL);
 }
 
 class AuthClient {
