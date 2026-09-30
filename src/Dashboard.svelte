@@ -28,6 +28,8 @@
   let draftName = $state('');
   let draftIcon = $state<string | null>(null);
   let modalError = $state('');
+  let controlMenu = $state(false);
+  let controlTrigger: HTMLButtonElement | null = null;
   let saving = $state(false);
   let readingIcon = $state(false);
   let uploadVersion = 0;
@@ -95,16 +97,16 @@
     return () => { disposed = true; uploadVersion++; clearInterval(timer); offConnection(); offSignal(); for (const [id, peer] of peers) { peer.close(); void window.marioNet!.closeConnection(id); } };
   });
   $effect(() => { if (modal && dialog && !dialog.open) dialog.showModal(); else if (!modal && dialog?.open) dialog.close(); });
-  function openNode(node: MonitorNode) {
+  function openNode(node: MonitorNode, trigger?: HTMLButtonElement) {
     if (multiControl) { if (!locked) selected = selected.includes(node.id) ? selected.filter(value => value !== node.id) : [...selected, node.id]; }
-    else { activeNode = node; modal = 'control'; }
+    else { controlTrigger = trigger ?? null; activeNode = node; modal = 'control'; }
   }
   function selectVisible() { if (!locked) selected = [...new Set([...selected, ...visibleNodes.map(node => node.id)])]; }
   function editPreset(preset?: MacroPreset) {
     editingId = preset?.id; draftName = preset?.name ?? ''; draftIcon = preset?.icon ?? null;
     modalError = ''; modal = 'preset';
   }
-  function closeModal() { if (!saving) { modal = null; uploadVersion++; readingIcon = false; } }
+  function closeModal() { if (!saving) { controlMenu = false; modal = null; controlTrigger?.blur(); controlTrigger = null; uploadVersion++; readingIcon = false; } }
   async function uploadIcon(event: Event) {
     const input = event.currentTarget as HTMLInputElement;
     const file = input.files?.[0]; input.value = '';
@@ -189,9 +191,8 @@
       {:else}
         <div class="node-grid">
           {#each visibleNodes as node (node.id)}
-            <button class="node-card" class:selected={selected.includes(node.id)} aria-pressed={multiControl && selected.includes(node.id)} aria-label={`${node.name} ${multiControl ? '선택' : '제어'}`} onclick={() => openNode(node)}>
-              <div class="node-preview"><span class="node-state"><i class="status-dot" class:online={node.online}></i>{node.online ? '온라인' : '오프라인'}</span><span class="node-check">{#if selected.includes(node.id)}<Icon name="check" size={13} />{/if}</span>{#if monitorStreams.get(node.id)}<video class="node-stream" autoplay muted playsinline use:streamVideo={monitorStreams.get(node.id)}></video>{:else}<Icon name="monitor" size={34} />{/if}<span class="preview-caption">{node.online ? monitorStatus.get(node.id) ?? '화면 연결 대기' : 'Host 연결 대기'}</span></div>
-              <div class="node-info"><strong>{node.name}</strong><span class="node-platform">{node.platform === 'windows' ? 'Windows' : node.platform === 'macos' ? 'macOS' : 'Linux'}</span><small>{lastSeen(node.lastSeenAt)}</small></div>
+            <button class="node-card" class:selected={selected.includes(node.id)} aria-pressed={multiControl && selected.includes(node.id)} aria-label={`${node.name} ${multiControl ? '선택' : '제어'}`} onclick={event => openNode(node, event.currentTarget as HTMLButtonElement)}>
+              <div class="node-preview"><span class="node-label"><strong>{node.name}</strong><small><i class="status-dot" class:online={node.online}></i>{node.online ? monitorStatus.get(node.id) ?? '연결 대기' : '오프라인'}</small></span><span class="node-check">{#if selected.includes(node.id)}<Icon name="check" size={13} />{/if}</span>{#if monitorStreams.get(node.id)}<video class="node-stream" autoplay muted playsinline use:streamVideo={monitorStreams.get(node.id)}></video>{:else}<Icon name="monitor" size={34} />{/if}</div>
             </button>
           {/each}
           {#if !query && filter === 'all'}<button class="add-node-card" onclick={() => modal = 'node'}><Icon name="plus" size={28} /><span>Node 추가</span></button>{/if}
@@ -216,9 +217,9 @@
 </main>
 
 <dialog class="dashboard-dialog control-dialog" class:control-dialog={modal === 'control'} bind:this={dialog} oncancel={event => { if (saving) event.preventDefault(); else closeModal(); }} onclose={closeModal} aria-labelledby="dialog-title">
-  <div class="dialog-heading"><h2 id="dialog-title">{modal === 'control' ? activeNode?.name : modal === 'node' ? 'Node 연결하기' : modal === 'delete' ? '프리셋 삭제' : editingId ? '프리셋 수정' : '새 프리셋'}</h2><button class="icon-button" aria-label="창 닫기" disabled={saving} onclick={closeModal}><Icon name="close" size={19} /></button></div>
+  {#if modal !== 'control'}<div class="dialog-heading"><h2 id="dialog-title">{modal === 'node' ? 'Node 연결하기' : modal === 'delete' ? '프리셋 삭제' : editingId ? '프리셋 수정' : '새 프리셋'}</h2><button class="icon-button" aria-label="창 닫기" disabled={saving} onclick={closeModal}><Icon name="close" size={19} /></button></div>{/if}
   {#if modal === 'control'}
-    {#if activeNode && monitorStreams.get(activeNode.id)}<video class="remote-screen" autoplay muted playsinline use:streamVideo={monitorStreams.get(activeNode.id)}></video>{:else}<div class="control-preview"><Icon name="monitor" size={64} /><span><i class:online={activeNode?.online}></i>{activeNode?.online ? monitorStatus.get(activeNode.id) ?? '화면 연결 대기' : '오프라인'}</span></div>{/if}<p class="dialog-copy">이 Node의 화면을 읽기 전용으로 모니터링하는 공간입니다.</p>
+    {#if activeNode && monitorStreams.get(activeNode.id)}<video class="remote-screen" autoplay muted playsinline use:streamVideo={monitorStreams.get(activeNode.id)}></video>{:else}<div class="control-preview"><Icon name="monitor" size={64} /><span><i class:online={activeNode?.online}></i>{activeNode?.online ? monitorStatus.get(activeNode.id) ?? '화면 연결 대기' : '오프라인'}</span></div>{/if}<button class="control-menu-button" aria-label="모니터 메뉴 열기" aria-expanded={controlMenu} onclick={() => controlMenu = !controlMenu}><Icon name="more" size={22} /></button>{#if controlMenu}<aside class="control-menu" aria-label="모니터 메뉴"><strong>{activeNode?.name}</strong><span>메뉴 항목은 준비 중이에요.</span><button onclick={closeModal}>화면 닫기</button></aside>{/if}
   {:else if modal === 'node'}
     <p class="dialog-copy">제어받을 PC의 Host 앱에서 등록해주세요.</p><ol class="connection-steps"><li><span>1</span><div><strong>Host에서 로그인</strong><p>현재 Client와 같은 계정을 사용하세요.</p></div></li><li><span>2</span><div><strong>PC를 Node로 등록</strong><p>이메일 인증을 완료한 뒤 PC를 등록하세요.</p></div></li><li><span>3</span><div><strong>이곳에서 목록 새로고침</strong><p>등록한 Node가 자동으로 표시됩니다.</p></div></li></ol><div class="dialog-note">Host 앱과 화면 전송 기능은 개발 예정이에요. Client에서 가상의 PC를 등록하지 않습니다.</div><button class="dash-button primary full" onclick={() => { closeModal(); void loadNodes(); }}>목록 새로고침<Icon name="refresh" size={16} /></button>
   {:else if modal === 'delete'}

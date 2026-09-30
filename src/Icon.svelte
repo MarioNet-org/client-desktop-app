@@ -18,6 +18,7 @@
     logout: 'M9 3H3v18h6 M9 12h12 M16 7l5 5-5 5',
     info: 'M12 16v-4 M12 8h.01 M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0',
     arrow: 'M4 12h16 M15 7l5 5-5 5',
+    more: 'M5 12h.01 M12 12h.01 M19 12h.01',
   };
 </script>
 <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={paths[name] ?? paths.monitor} /></svg>
